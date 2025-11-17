@@ -1,0 +1,151 @@
+/***********************************************************************
+   BASIC QUADCOPTER FLIGHT CONTROLLER (EDUCATIONAL ONLY)
+   Hardware:
+     - Arduino/ESP32
+     - MPU6050
+     - 4 ESCs + Brushless Motors
+     - RC Receiver (Pitch, Roll, Yaw, Throttle)
+
+   Features:
+     - Read IMU
+     - PID stabilization
+     - Motor mixing
+
+   SAFE FOR EDUCATION ONLY (NO PROP TESTING INDOORS)
+************************************************************************/
+
+#include <Wire.h>
+
+// ---------------------- ESC PINS -----------------------
+#define M1 3
+#define M2 5
+#define M3 6
+#define M4 9
+
+// ---------------------- RC CHANNELS --------------------
+#define ROLL_PIN     2
+#define PITCH_PIN    4
+#define THROTTLE_PIN 7
+#define YAW_PIN      8
+
+// ---------------------- PID GAINS ----------------------
+float kp = 1.5;
+float ki = 0.0;
+float kd = 0.6;
+
+float errorRoll, errorPitch, errorYaw;
+float iRoll, iPitch, iYaw;
+float lastRoll, lastPitch, lastYaw;
+
+// ---------------------- MPU6050 ------------------------
+int16_t ax, ay, az, gx, gy, gz;
+
+// ---------------------- SETUP --------------------------
+void setup() {
+  Serial.begin(9600);
+  Wire.begin();
+
+  // Motor outputs
+  pinMode(M1, OUTPUT);
+  pinMode(M2, OUTPUT);
+  pinMode(M3, OUTPUT);
+  pinMode(M4, OUTPUT);
+
+  // RC inputs
+  pinMode(ROLL_PIN, INPUT);
+  pinMode(PITCH_PIN, INPUT);
+  pinMode(THROTTLE_PIN, INPUT);
+  pinMode(YAW_PIN, INPUT);
+
+  initMPU();
+  armMotors();
+}
+
+// ---------------------- MAIN LOOP -----------------------
+void loop() {
+  // 1. READ RC SIGNALS
+  int throttle = pulseIn(THROTTLE_PIN, HIGH, 25000);
+  int rollCmd  = pulseIn(ROLL_PIN, HIGH, 25000);
+  int pitchCmd = pulseIn(PITCH_PIN, HIGH, 25000);
+  int yawCmd   = pulseIn(YAW_PIN, HIGH, 25000);
+
+  // Convert to center 1500 range
+  rollCmd  -= 1500;
+  pitchCmd -= 1500;
+  yawCmd   -= 1500;
+
+  // 2. READ IMU
+  readMPU();
+  float roll  = gx / 131.0;
+  float pitch = gy / 131.0;
+  float yaw   = gz / 131.0;
+
+  // 3. PID CONTROL
+  float rollPID  = computePID(errorRoll, iRoll, lastRoll, rollCmd - roll);
+  float pitchPID = computePID(errorPitch, iPitch, lastPitch, pitchCmd - pitch);
+  float yawPID   = computePID(errorYaw, iYaw, lastYaw, yawCmd - yaw);
+
+  // 4. MOTOR MIXING (X-configuration)
+  int m1 = throttle + pitchPID - rollPID + yawPID;
+  int m2 = throttle + pitchPID + rollPID - yawPID;
+  int m3 = throttle - pitchPID + rollPID + yawPID;
+  int m4 = throttle - pitchPID - rollPID - yawPID;
+
+  // Limit to ESC PWM range
+  m1 = constrain(m1, 1000, 2000);
+  m2 = constrain(m2, 1000, 2000);
+  m3 = constrain(m3, 1000, 2000);
+  m4 = constrain(m4, 1000, 2000);
+
+  // 5. SEND TO MOTORS
+  writeMotor(M1, m1);
+  writeMotor(M2, m2);
+  writeMotor(M3, m3);
+  writeMotor(M4, m4);
+}
+
+// ---------------------- FUNCTIONS -----------------------
+
+void initMPU() {
+  Wire.beginTransmission(0x68);
+  Wire.write(0x6B); 
+  Wire.write(0);     
+  Wire.endTransmission(true);
+}
+
+void readMPU() {
+  Wire.beginTransmission(0x68);
+  Wire.write(0x3B);
+  Wire.endTransmission(false);
+  Wire.requestFrom(0x68, 14, true);
+
+  ax = Wire.read()<<8 | Wire.read();
+  ay = Wire.read()<<8 | Wire.read();
+  az = Wire.read()<<8 | Wire.read();
+  gx = Wire.read()<<8 | Wire.read();
+  gy = Wire.read()<<8 | Wire.read();
+  gz = Wire.read()<<8 | Wire.read();
+}
+
+float computePID(float &err, float &iVal, float &last, float newErr) {
+  err = newErr;
+  iVal += err;
+  float dVal = err - last;
+  last = err;
+
+  return (kp * err) + (ki * iVal) + (kd * dVal);
+}
+
+void writeMotor(int pin, int pwm) {
+  int us = map(pwm, 1000, 2000, 1000, 2000);
+  delayMicroseconds(us);
+}
+
+void armMotors() {
+  Serial.println("Arming motors...");
+  writeMotor(M1, 1000);
+  writeMotor(M2, 1000);
+  writeMotor(M3, 1000);
+  writeMotor(M4, 1000);
+  delay(2000);
+}
